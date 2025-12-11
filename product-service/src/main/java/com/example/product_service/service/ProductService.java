@@ -6,14 +6,16 @@ import com.example.product_service.model.Product;
 import com.example.product_service.repository.ProductRepository;
 import com.example.product_service.kafka.ProductEventProducer;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Service
+@Transactional
 public class ProductService {
 
     private final ProductRepository productRepository;
-    private final ProductEventProducer producer; // отдельный продюсер
+    private final ProductEventProducer producer;
 
     public ProductService(ProductRepository productRepository, ProductEventProducer producer) {
         this.productRepository = productRepository;
@@ -21,49 +23,35 @@ public class ProductService {
     }
 
     public ProductResponse createProduct(ProductRequest productRequest) {
-        Product product = new Product(
-                null,
-                productRequest.skuCode(),
-                productRequest.name(),
-                productRequest.description(),
-                productRequest.price()
-        );
+        productRepository.findBySkuCode(productRequest.skuCode())
+                .ifPresent(product -> {
+                    throw new RuntimeException("SKU code already exists: " + productRequest.skuCode());
+                });
 
-        productRepository.save(product);
+        Product product = new Product();
+        product.setSkuCode(productRequest.skuCode());
+        product.setName(productRequest.name());
+        product.setDescription(productRequest.description());
+        product.setPrice(productRequest.price());
 
-        producer.sendProductCreatedEvent(product.getSkuCode());
+        product.setQuantity(productRequest.quantity() != null ? productRequest.quantity() : 0);
 
-        return new ProductResponse(
-                product.getId(),
-                product.getName(),
-                product.getDescription(),
-                product.getPrice(),
-                0
-        );
+        Product savedProduct = productRepository.save(product);
+        producer.sendProductCreatedEvent(savedProduct.getSkuCode());
+
+        return mapToResponse(savedProduct);
     }
 
     public List<ProductResponse> getAllProducts() {
         return productRepository.findAll().stream()
-                .map(product -> new ProductResponse(
-                        product.getId(),
-                        product.getName(),
-                        product.getDescription(),
-                        product.getPrice(),
-                        0
-                ))
+                .map(this::mapToResponse)
                 .toList();
     }
 
     public ProductResponse getProductById(Long id) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Product not found with id: " + id));
-        return new ProductResponse(
-                product.getId(),
-                product.getName(),
-                product.getDescription(),
-                product.getPrice(),
-                0
-        );
+        return mapToResponse(product);
     }
 
     public ProductResponse updateProduct(Long id, ProductRequest productRequest) {
@@ -82,41 +70,25 @@ public class ProductService {
         existingProduct.setDescription(productRequest.description());
         existingProduct.setPrice(productRequest.price());
 
-        Product updatedProduct = productRepository.save(existingProduct);
+        if (productRequest.quantity() != null) {
+            existingProduct.setQuantity(productRequest.quantity());
+        }
 
+        Product updatedProduct = productRepository.save(existingProduct);
         producer.sendProductUpdatedEvent(updatedProduct.getSkuCode());
 
-        return new ProductResponse(
-                updatedProduct.getId(),
-                updatedProduct.getName(),
-                updatedProduct.getDescription(),
-                updatedProduct.getPrice(),
-                0
-        );
-    }
-
-    public void deleteProduct(Long id) {
-        Product product = productRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Product not found with id: " + id));
-
-        String skuCode = product.getSkuCode();
-
-        productRepository.delete(product);
-
-        producer.sendProductDeletedEvent(skuCode);
+        return mapToResponse(updatedProduct);
     }
 
     public ProductResponse partialUpdateProduct(Long id, ProductRequest productRequest) {
         Product existingProduct = productRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Product not found with id: " + id));
 
-        if (productRequest.skuCode() != null) {
-            if (!existingProduct.getSkuCode().equals(productRequest.skuCode())) {
-                productRepository.findBySkuCode(productRequest.skuCode())
-                        .ifPresent(p -> {
-                            throw new RuntimeException("SKU code already exists: " + productRequest.skuCode());
-                        });
-            }
+        if (productRequest.skuCode() != null && !productRequest.skuCode().equals(existingProduct.getSkuCode())) {
+            productRepository.findBySkuCode(productRequest.skuCode())
+                    .ifPresent(p -> {
+                        throw new RuntimeException("SKU code already exists: " + productRequest.skuCode());
+                    });
             existingProduct.setSkuCode(productRequest.skuCode());
         }
 
@@ -132,17 +104,33 @@ public class ProductService {
             existingProduct.setPrice(productRequest.price());
         }
 
+        if (productRequest.quantity() != null) {
+            existingProduct.setQuantity(productRequest.quantity());
+        }
+
         Product updatedProduct = productRepository.save(existingProduct);
         producer.sendProductUpdatedEvent(updatedProduct.getSkuCode());
 
+        return mapToResponse(updatedProduct);
+    }
+
+    public void deleteProduct(Long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found with id: " + id));
+
+        String skuCode = product.getSkuCode();
+        productRepository.delete(product);
+        producer.sendProductDeletedEvent(skuCode);
+    }
+
+    private ProductResponse mapToResponse(Product product) {
         return new ProductResponse(
-                updatedProduct.getId(),
-                updatedProduct.getName(),
-                updatedProduct.getDescription(),
-                updatedProduct.getPrice(),
-                0
+                product.getId(),
+                product.getSkuCode(),
+                product.getName(),
+                product.getDescription(),
+                product.getPrice(),
+                product.getQuantity()
         );
     }
 }
-
-

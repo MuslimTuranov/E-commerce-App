@@ -23,26 +23,16 @@ public class Product {
     private BigDecimal price;
 
     @Column(nullable = false)
-    private Integer quantity;
-    {
-        quantity = 0;
-    }
+    private Integer quantity = 0;
 
     public Product() {}
 
-    public Product(Long id, String skuCode, String name, String description, BigDecimal price) {
-        this.id = id;
+    public Product(String skuCode, String name, String description, BigDecimal price, Integer quantity) {
         this.skuCode = skuCode;
         this.name = name;
         this.description = description;
         this.price = price;
-    }
-
-    public Product(String skuCode, String name, String description, BigDecimal price) {
-        this.skuCode = skuCode;
-        this.name = name;
-        this.description = description;
-        this.price = price;
+        this.quantity = quantity != null ? quantity : 0;
     }
 
     public Long getId() {
@@ -76,7 +66,9 @@ public class Product {
     public BigDecimal getPrice() {
         return price;
     }
-    public void setPrice(BigDecimal price) { this.price = price; }
+    public void setPrice(BigDecimal price) {
+        this.price = price;
+    }
 
     public Integer getQuantity() {
         return quantity;
@@ -94,6 +86,7 @@ public class Product {
                 ", name='" + name + '\'' +
                 ", description='" + description + '\'' +
                 ", price=" + price +
+                ", quantity=" + quantity +
                 '}';
     }
 }
