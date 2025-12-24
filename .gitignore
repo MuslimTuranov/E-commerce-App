@@ -153,3 +153,6 @@ tmp/
 
 # Keep empty directories
 !.gitkeep
+
+docker-compose.override.yml
+application-local.properties
