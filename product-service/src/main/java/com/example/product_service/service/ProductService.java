@@ -5,22 +5,29 @@ import com.example.product_service.dto.ProductResponse;
 import com.example.product_service.model.Product;
 import com.example.product_service.repository.ProductRepository;
 import com.example.product_service.kafka.ProductEventProducer;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.example.product_service.external.client.InventoryClient;
 
 import java.util.List;
 
 @Service
 @Transactional
+@Slf4j
 public class ProductService {
 
     private final ProductRepository productRepository;
     private final ProductEventProducer producer;
+    private final InventoryClient inventoryClient;
 
-    public ProductService(ProductRepository productRepository, ProductEventProducer producer) {
+    public ProductService(ProductRepository productRepository, ProductEventProducer producer, InventoryClient inventoryClient) {
         this.productRepository = productRepository;
         this.producer = producer;
+        this.inventoryClient = inventoryClient;
     }
+
 
     public ProductResponse createProduct(ProductRequest productRequest) {
         productRepository.findBySkuCode(productRequest.skuCode())
@@ -33,11 +40,10 @@ public class ProductService {
         product.setName(productRequest.name());
         product.setDescription(productRequest.description());
         product.setPrice(productRequest.price());
-
         product.setQuantity(productRequest.quantity() != null ? productRequest.quantity() : 0);
 
         Product savedProduct = productRepository.save(product);
-        producer.sendProductCreatedEvent(savedProduct.getSkuCode());
+        producer.sendProductCreatedEvent(savedProduct.getSkuCode(), savedProduct.getQuantity());
 
         return mapToResponse(savedProduct);
     }
@@ -53,6 +59,35 @@ public class ProductService {
                 .orElseThrow(() -> new RuntimeException("Product not found with id: " + id));
         return mapToResponse(product);
     }
+
+
+    private ProductResponse mapToResponse(Product product) {
+        Integer actualQuantity = getActualQuantityFromInventory(product.getSkuCode());
+
+        return new ProductResponse(
+                product.getId(),
+                product.getSkuCode(),
+                product.getName(),
+                product.getDescription(),
+                product.getPrice(),
+                actualQuantity
+        );
+    }
+
+
+    private Integer getActualQuantityFromInventory(String skuCode) {
+        try {
+            log.info("Fetching actual quantity for SKU: {}", skuCode);
+            var response = inventoryClient.getInventoryBySkuCode(skuCode);
+            if (response.getBody() != null) {
+                return response.getBody().quantity();
+            }
+        } catch (Exception e) {
+            log.error("Could not fetch inventory for SKU {}: {}. Using DB fallback.", skuCode, e.getMessage());
+        }
+        return 0;
+    }
+
 
     public ProductResponse updateProduct(Long id, ProductRequest productRequest) {
         Product existingProduct = productRepository.findById(id)
@@ -121,16 +156,5 @@ public class ProductService {
         String skuCode = product.getSkuCode();
         productRepository.delete(product);
         producer.sendProductDeletedEvent(skuCode);
-    }
-
-    private ProductResponse mapToResponse(Product product) {
-        return new ProductResponse(
-                product.getId(),
-                product.getSkuCode(),
-                product.getName(),
-                product.getDescription(),
-                product.getPrice(),
-                product.getQuantity()
-        );
     }
 }

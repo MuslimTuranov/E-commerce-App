@@ -13,8 +13,9 @@ public class ProductEventProducer {
         this.kafkaTemplate = kafkaTemplate;
     }
 
-    public void sendProductCreatedEvent(String skuCode) {
-        kafkaTemplate.send(TOPIC, "Product created: " + skuCode);
+    public void sendProductCreatedEvent(String skuCode, Integer quantity) {
+        String message = "CREATED:" + skuCode + ":" + (quantity != null ? quantity : 0);
+        kafkaTemplate.send(TOPIC, message);
     }
 
     public void sendProductUpdatedEvent(String skuCode) {
