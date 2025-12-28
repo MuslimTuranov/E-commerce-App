@@ -28,46 +28,33 @@ public class OrderService {
     private final KafkaTemplate<String, OrderPlacedEvent> kafkaTemplate;
 
     public boolean placeOrder(OrderRequest orderRequest) {
-        try {
-            var isProductInStock = inventoryClient.isInStock(orderRequest.skuCode(), orderRequest.quantity());
 
-            if (isProductInStock) {
-                Order order = new Order();
-                order.setOrderNumber(UUID.randomUUID().toString());
-                order.setPrice(orderRequest.price());
-                order.setQuantity(orderRequest.quantity());
-                order.setSkuCode(orderRequest.skuCode());
+        boolean isInStock =
+                inventoryClient.isInStock(orderRequest.skuCode(), orderRequest.quantity());
 
-                orderRepository.save(order);
-
-                ResponseEntity<InventoryResponse> response = inventoryClient.decreaseInventory(
-                        new InventoryRequest(orderRequest.skuCode(), orderRequest.quantity())
-                );
-
-                if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                    InventoryResponse inventoryResponse = response.getBody();
-                    log.info("Inventory updated - SkuCode: {}, Quantity: {}",
-                            inventoryResponse.skuCode(),
-                            inventoryResponse.quantity()
-                    );
-
-                    OrderPlacedEvent orderPlacedEvent = new OrderPlacedEvent(order.getOrderNumber(), orderRequest.userDetails().email());
-                    log.info("Start - Sending OrderPlacedEvent {} to Kafka topic order-placed", orderPlacedEvent);
-                    kafkaTemplate.send("order-placed", orderPlacedEvent);
-                    log.info("End - Sending OrderPlacedEvent {} to Kafka topic order-placed", orderPlacedEvent);
-
-                    return true;
-                } else {
-                    log.error("Failed to update inventory. Status: {}", response.getStatusCode());
-                    return false;
-                }
-            } else {
-                log.warn("Product with skuCode {} is out of stock", orderRequest.skuCode());
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("Error occurred while processing order: {}", e.getMessage(), e);
+        if (!isInStock) {
+            log.warn("Product {} is out of stock", orderRequest.skuCode());
             return false;
         }
+
+        Order order = new Order();
+        order.setOrderNumber(UUID.randomUUID().toString());
+        order.setSkuCode(orderRequest.skuCode());
+        order.setQuantity(orderRequest.quantity());
+
+        orderRepository.save(order);
+
+        inventoryClient.decreaseInventory(
+                new InventoryRequest(orderRequest.skuCode(), orderRequest.quantity())
+        );
+
+        OrderPlacedEvent event =
+                new OrderPlacedEvent(order.getOrderNumber());
+
+        kafkaTemplate.send("order-placed", event);
+
+        log.info("Order placed successfully {}", order.getOrderNumber());
+
+        return true;
     }
 }
