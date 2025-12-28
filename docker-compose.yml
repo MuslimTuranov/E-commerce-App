@@ -69,5 +69,21 @@ services:
       kafka:
         condition: service_started
 
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/orderdb
+      KAFKA_URL: kafka:9092
+      INVENTORY_URL: http://inventory-service:8082
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+
+
 volumes:
   postgres_data:
