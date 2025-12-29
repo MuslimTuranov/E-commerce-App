@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 
@@ -41,6 +42,7 @@ public class OrderService {
         order.setOrderNumber(UUID.randomUUID().toString());
         order.setSkuCode(orderRequest.skuCode());
         order.setQuantity(orderRequest.quantity());
+        order.setPrice(BigDecimal.valueOf(0));
 
         orderRepository.save(order);
 

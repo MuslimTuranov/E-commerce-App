@@ -9,6 +9,7 @@ import com.example.order_service.model.Order;
 import com.example.order_service.repository.OrderRepository;
 import com.example.order_service.service.OrderService;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.junit.jupiter.api.AfterEach;
@@ -23,24 +24,27 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.shaded.com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EmbeddedKafka(topics = {"order-placed"}, partitions = 1, brokerProperties = {"listeners=PLAINTEXT://localhost:9092", "port=9092"})
+@EmbeddedKafka(topics = {"order-placed"}, partitions = 1)
 @Testcontainers
 @DirtiesContext
+@ActiveProfiles("test")
 class OrderServiceKafkaTest {
 
     @Container
@@ -71,12 +75,20 @@ class OrderServiceKafkaTest {
     void setUp() {
         orderRepository.deleteAll();
 
-        Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("testGroup", "true", embeddedKafka);
-        consumerProps.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-        consumerProps.put("value.deserializer", "org.testcontainers.shaded.com.fasterxml.jackson.databind.JsonDeserializer");
-        consumerProps.put("spring.deserializer.value.delegate.class", OrderPlacedEvent.class.getName());
-        consumerProps.put("spring.json.trusted.packages", "*");
-        consumer = new DefaultKafkaConsumerFactory<String, OrderPlacedEvent>(consumerProps).createConsumer();
+        Map<String, Object> consumerProps = new HashMap<>();
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString());
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "testGroup");
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
+
+        consumer = new DefaultKafkaConsumerFactory<>(
+                consumerProps,
+                new org.apache.kafka.common.serialization.StringDeserializer(),
+                new JsonDeserializer<>(OrderPlacedEvent.class)
+        ).createConsumer();
+
         embeddedKafka.consumeFromAnEmbeddedTopic(consumer, "order-placed");
     }
 
@@ -88,7 +100,8 @@ class OrderServiceKafkaTest {
     @Test
     void testKafkaIntegration_ShouldSendOrderPlacedEvent_WhenOrderCreated() {
         // Arrange
-        OrderRequest request = new OrderRequest("TEST-SKU", 5);
+        OrderRequest.UserDetails details = new OrderRequest.UserDetails("Ivan", "Ivanov", "ivan@mail.com");
+        OrderRequest request = new OrderRequest("TEST-SKU", 10, details);
 
         // Mock inventory client to return in stock
         InventoryClient inventoryClient = new InventoryClient() {
@@ -102,7 +115,6 @@ class OrderServiceKafkaTest {
                 return ResponseEntity.ok(new InventoryResponse(1L, request.skuCode(), request.quantity()));
             }
 
-            @Override
             public ResponseEntity<InventoryResponse> getInventoryBySkuCode(String skuCode) {
                 return ResponseEntity.ok(new InventoryResponse(1L, skuCode, 10));
             }

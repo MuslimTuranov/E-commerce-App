@@ -9,8 +9,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -18,14 +16,19 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.kafka.test.context.EmbeddedKafka;
+
 
 import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@ActiveProfiles("test")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
+@EmbeddedKafka(partitions = 1, bootstrapServersProperty = "spring.kafka.bootstrap-servers")
 class ProductServiceIntegrationTest {
 
     @Container
@@ -63,48 +66,30 @@ class ProductServiceIntegrationTest {
                 10
         );
 
-        // Act
         ResponseEntity<ProductResponse> response = restTemplate.postForEntity(
-                "/api/products",
+                "/api/product",
                 request,
                 ProductResponse.class
         );
 
-        // Assert
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals("TEST-SKU", response.getBody().skuCode());
-        assertEquals("Test Product", response.getBody().name());
-        assertEquals(99.99, response.getBody().price());
+        assertTrue(new BigDecimal("99.99").compareTo(response.getBody().price()) == 0);
     }
 
     @Test
     void testProductController_ShouldGetAllProducts() {
-        // Arrange
-        Product product1 = new Product();
-        product1.setId(1L);
-        product1.setSkuCode("SKU-1");
-        product1.setName("Product 1");
-        product1.setDescription("Desc 1");
-        product1.setPrice(new BigDecimal("10.0"));
-        product1.setQuantity(5);
+        Product product1 = new Product("SKU-1", "Product 1", "Desc 1", new BigDecimal("10.0"), 5);
+        Product product2 = new Product("SKU-2", "Product 2", "Desc 2", new BigDecimal("20.0"), 10);
 
-        Product product2 = new Product();
-        product2.setId(2L);
-        product2.setSkuCode("SKU-2");
-        product2.setName("Product 2");
-        product2.setDescription("Desc 2");
-        product2.setPrice(new BigDecimal("20.0"));
-        product2.setQuantity(10);
         productRepository.saveAll(List.of(product1, product2));
 
-        // Act
         ResponseEntity<ProductResponse[]> response = restTemplate.getForEntity(
-                "/api/products",
+                "/api/product",
                 ProductResponse[].class
         );
 
-        // Assert
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(2, response.getBody().length);

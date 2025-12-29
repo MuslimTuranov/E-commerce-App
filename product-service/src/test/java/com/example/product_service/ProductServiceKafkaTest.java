@@ -3,8 +3,9 @@ package com.example.product_service;
 import com.example.product_service.dto.ProductRequest;
 import com.example.product_service.dto.ProductResponse;
 import com.example.product_service.external.client.InventoryClient;
+import com.example.product_service.external.dto.InventoryRequest;
 import com.example.product_service.external.dto.InventoryResponse;
-import com.example.product_service.model.Product;
+import com.example.product_service.kafka.ProductEventProducer;
 import com.example.product_service.repository.ProductRepository;
 import com.example.product_service.service.ProductService;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -26,18 +27,21 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 
+@ActiveProfiles("test")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EmbeddedKafka(topics = {"product-created"}, partitions = 1, brokerProperties = {"listeners=PLAINTEXT://localhost:9092", "port=9092"})
+@EmbeddedKafka(
+        topics = {"product-events"},
+        partitions = 1,
+        bootstrapServersProperty = "spring.kafka.bootstrap-servers"
+)
 @Testcontainers
 @DirtiesContext
 class ProductServiceKafkaTest {
@@ -61,6 +65,9 @@ class ProductServiceKafkaTest {
     @Autowired
     private ProductRepository productRepository;
 
+    @Autowired
+    private ProductEventProducer productEventProducer; // Используем настоящий продюсер
+
     private Consumer<String, String> consumer;
 
     @BeforeEach
@@ -70,13 +77,16 @@ class ProductServiceKafkaTest {
         Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("testGroup", "true", embeddedKafka);
         consumerProps.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
         consumerProps.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+
         consumer = new DefaultKafkaConsumerFactory<String, String>(consumerProps).createConsumer();
-        embeddedKafka.consumeFromAnEmbeddedTopic(consumer, "product-created");
+        embeddedKafka.consumeFromAnEmbeddedTopic(consumer, "product-events");
     }
 
     @AfterEach
     void tearDown() {
-        consumer.close();
+        if (consumer != null) {
+            consumer.close();
+        }
     }
 
     @Test
@@ -90,36 +100,35 @@ class ProductServiceKafkaTest {
                 10
         );
 
-        // Mock inventory client
         InventoryClient inventoryClient = new InventoryClient() {
             @Override
             public ResponseEntity<InventoryResponse> getInventoryBySkuCode(String skuCode) {
                 return ResponseEntity.ok(new InventoryResponse(1L, skuCode, 10));
             }
+
+            @Override
+            public ResponseEntity<InventoryResponse> upsertInventory(InventoryRequest request) {
+                return ResponseEntity.ok(new InventoryResponse(1L, request.skuCode(), request.quantity()));
+            }
         };
 
-        // Create product service with mocked inventory client
-        ProductService productService = new ProductService(productRepository, null, inventoryClient);
+        ProductService productService = new ProductService(productRepository, productEventProducer, inventoryClient);
 
-        // Act
         ProductResponse response = productService.createProduct(request);
 
-        // Wait for Kafka message
-        ConsumerRecords<String, String> records = KafkaTestUtils.getRecords(consumer, Duration.ofSeconds(5));
+        ConsumerRecords<String, String> records = KafkaTestUtils.getRecords(consumer, Duration.ofSeconds(10));
 
-        // Assert
         assertNotNull(response);
         assertEquals("NEW-SKU", response.skuCode());
-        assertTrue(records.count() > 0);
+        assertTrue(records.count() > 0, "No messages received from Kafka!");
+
         boolean productCreatedFound = false;
         for (ConsumerRecord<String, String> record : records) {
-            if (record.topic().equals("product-created")) {
+            if (record.value().contains("CREATED:NEW-SKU:10")) {
                 productCreatedFound = true;
-                assertTrue(record.value().contains("NEW-SKU"));
-                assertTrue(record.value().contains("10"));
                 break;
             }
         }
-        assertTrue(productCreatedFound, "Product created event should be sent");
+        assertTrue(productCreatedFound, "Product created event with correct data should be sent to Kafka");
     }
 }

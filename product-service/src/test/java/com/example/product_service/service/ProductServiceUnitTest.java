@@ -14,6 +14,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.ActiveProfiles;
+
 
 import java.math.BigDecimal;
 import java.util.Arrays;
@@ -26,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
+@ActiveProfiles("test")
 @ExtendWith(MockitoExtension.class)
 class ProductServiceUnitTest {
 
@@ -80,7 +83,7 @@ class ProductServiceUnitTest {
         assertNotNull(response);
         assertEquals("TEST-SKU", response.skuCode());
         assertEquals("Test Product", response.name());
-        assertEquals(99.99, response.price());
+        assertEquals(0, new BigDecimal("99.99").compareTo(response.price()));
         assertEquals(10, response.quantity());
         verify(productRepository, times(1)).findBySkuCode("TEST-SKU");
         verify(productRepository, times(1)).save(any(Product.class));
