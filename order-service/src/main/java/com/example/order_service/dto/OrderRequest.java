@@ -2,12 +2,8 @@ package com.example.order_service.dto;
 
 import java.math.BigDecimal;
 
-public record OrderRequest(Long id,
-                           String orderNumber,
-                           String skuCode,
-                           String productId,
+public record OrderRequest(String skuCode,
                            Integer quantity,
-                           BigDecimal price,
                            UserDetails userDetails) {
     public record UserDetails(String email, String firstName, String lastName) {}
 }
