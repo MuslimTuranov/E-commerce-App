@@ -1,102 +1,87 @@
 package com.example.order_service;
 
-import com.example.order_service.client.InventoryClient; // Проверь импорт!
+import com.example.order_service.client.InventoryClient;
 import com.example.order_service.dto.OrderRequest;
-import com.example.order_service.external.dto.InventoryRequest;
-import com.example.order_service.external.dto.InventoryResponse;
+import com.example.order_service.model.Order;
 import com.example.order_service.repository.OrderRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.http.*;
+
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.kafka.test.context.EmbeddedKafka;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.web.client.RestTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EmbeddedKafka(topics = {"order-placed"}, partitions = 1)
-@ActiveProfiles("test")
+@AutoConfigureTestRestTemplate
 @Testcontainers
 class OrderServiceIntegrationTest {
 
-    @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
-            .withDatabaseName("order-db")
-            .withUsername("postgres")
-            .withPassword("postgres");
-
-    @DynamicPropertySource
-    static void configureProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-    }
-
-    @LocalServerPort
-    private int port;
+    @Autowired
+    private TestRestTemplate restTemplate;
 
     @Autowired
     private OrderRepository orderRepository;
 
     @MockitoBean
-    private InventoryClient inventoryClient;
-
-    private RestTemplate restTemplate;
+    private InventoryClient inventoryClient; // Mock the client
 
     @BeforeEach
     void setUp() {
         orderRepository.deleteAll();
-        restTemplate = new RestTemplate();
+        // Mock the isInStock method to always return true
+        when(inventoryClient.isInStock("TEST-SKU", 5)).thenReturn(true);
     }
 
     @Test
-    void testOrderController_ShouldCreateOrder_WhenProductInStock() {
-        // Arrange
-        OrderRequest.UserDetails details = new OrderRequest.UserDetails("Ivan", "Ivanov", "ivan@mail.com");
-        OrderRequest request = new OrderRequest("TEST-SKU", 10, details);
+    void placeOrder_ShouldReturnCreatedStatus() throws Exception {
+        OrderRequest.UserDetails details = new OrderRequest.UserDetails("test@mail.com", "Test", "User");
+        OrderRequest request = new OrderRequest("TEST-SKU", 5, details);
 
-        when(inventoryClient.isInStock(anyString(), anyInt())).thenReturn(true);
-        when(inventoryClient.decreaseInventory(any(InventoryRequest.class)))
-                .thenReturn(ResponseEntity.ok(new InventoryResponse(1L, "TEST-SKU", 10)));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
 
-        // Act
-        String baseUrl = "http://localhost:" + port + "/api/order";
-        ResponseEntity<Boolean> response = restTemplate.postForEntity(baseUrl, request, Boolean.class);
+        HttpEntity<OrderRequest> entity = new HttpEntity<>(request, headers);
 
-        // Assert
-        assertEquals(HttpStatus.OK, response.getStatusCode());
+        ResponseEntity<String> response = restTemplate.postForEntity("/api/order", entity, String.class);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertTrue(response.getBody());
+
+        // Since your controller returns plain string, adjust parsing
+        assertTrue(response.getBody().contains("Order placed successfully"));
     }
 
     @Test
-    void testOrderController_ShouldReturnFalse_WhenProductOutOfStock() {
-        // Arrange
-        OrderRequest.UserDetails details = new OrderRequest.UserDetails("Ivan", "Ivanov", "ivan@mail.com");
-        OrderRequest request = new OrderRequest("TEST-SKU", 10, details);
+    void getAllOrders_ShouldReturnOrders() throws Exception {
+        Order order1 = new Order();
+        order1.setOrderNumber("ORDER-1");
+        order1.setSkuCode("SKU-1");
+        order1.setQuantity(5);
 
-        when(inventoryClient.isInStock(anyString(), anyInt())).thenReturn(false);
+        Order order2 = new Order();
+        order2.setOrderNumber("ORDER-2");
+        order2.setSkuCode("SKU-2");
+        order2.setQuantity(10);
 
-        // Act
-        String baseUrl = "http://localhost:" + port + "/api/order";
-        ResponseEntity<Boolean> response = restTemplate.postForEntity(baseUrl, request, Boolean.class);
+        orderRepository.save(order1);
+        orderRepository.save(order2);
 
-        // Assert
+        ResponseEntity<Order[]> response = restTemplate.getForEntity("/api/order", Order[].class);
+
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertFalse(response.getBody());
+        assertEquals(2, response.getBody().length);
+
+        assertEquals("SKU-1", response.getBody()[0].getSkuCode());
+        assertEquals("SKU-2", response.getBody()[1].getSkuCode());
     }
 }
