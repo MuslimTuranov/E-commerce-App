@@ -6,7 +6,10 @@ services:
     container_name: project-postgres
     environment:
       POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Malika2019
       POSTGRES_DB: productdb
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-database.sql:/docker-entrypoint-initdb.d/init-database.sql
@@ -25,6 +28,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     container_name: project-kafka
+    ports:
+      - "9092:9092"
     depends_on:
       - zookeeper
     environment:
@@ -37,8 +42,12 @@ services:
   product-service:
     build: ./product-service
     container_name: product-service
+    ports:
+      - "8081:8081"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/productdb
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: Malika2019
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres:
@@ -49,8 +58,12 @@ services:
   inventory-service:
     build: ./inventory-service
     container_name: inventory-service
+    ports:
+      - "8082:8082"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/inventorydb
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: Malika2019
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres:
@@ -58,22 +71,15 @@ services:
       kafka:
         condition: service_started
 
-  notification-service:
-    build: ./notification-service
-    container_name: notification-service
-    environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_MAIL_HOST: sandbox.smtp.mailtrap.io
-      SPRING_MAIL_PORT: 2525
-    depends_on:
-      kafka:
-        condition: service_started
-
   order-service:
     build: ./order-service
     container_name: order-service
+    ports:
+      - "8083:8083"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/orderdb
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: Malika2019
       KAFKA_URL: kafka:9092
       INVENTORY_URL: http://inventory-service:8082
     depends_on:
@@ -83,6 +89,48 @@ services:
         condition: service_started
       inventory-service:
         condition: service_started
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_MAIL_HOST: sandbox.smtp.mailtrap.io
+      SPRING_MAIL_PORT: 2525
+    depends_on:
+      kafka:
+        condition: service_started
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    container_name: keycloak
+    command: start-dev --db postgres --import-realm
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_HTTP_PORT=7080
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://project-postgres:5432/keycloak_db
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=Malika2019
+      - KC_HEALTH_ENABLED=true
+    ports:
+      - "7080:7080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/7080"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   api-gateway:
     build: ./api-gateway
@@ -94,22 +142,19 @@ services:
       ORDER_SERVICE_URL: http://order-service:8083
       INVENTORY_SERVICE_URL: http://inventory-service:8082
       SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_KEYCLOAK_ISSUER_URI: http://keycloak:7080/realms/ecommerce-realm
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:7080/realms/ecommerce-realm
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:7080/realms/ecommerce-realm
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KEYCLOAK_CLIENT_ID: api-gateway-client
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KEYCLOAK_CLIENT_SECRET: 7dMgQ7sqdCDi7HMImP14I5oJiFoOHLm9
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_KEYCLOAK_CLIENT_AUTHENTICATION_METHOD: client_secret_post
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:7080/realms/ecommerce-realm/protocol/openid-connect/certs
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY: DEBUG
     depends_on:
-      - keycloak
-      - product-service
-      - order-service
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:24.0.1
-    command: start-dev
-    environment:
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_HTTP_PORT=7080
-    ports:
-      - "7080:7080"
-
+      keycloak:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      order-service:
+        condition: service_started
 
 volumes:
   postgres_data:
