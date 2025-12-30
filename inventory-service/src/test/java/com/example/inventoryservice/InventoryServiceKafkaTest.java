@@ -4,7 +4,9 @@ import com.example.inventoryservice.dto.InventoryRequest;
 import com.example.inventoryservice.dto.InventoryResponse;
 import com.example.inventoryservice.model.Inventory;
 import com.example.inventoryservice.repository.InventoryRepository;
+import com.example.inventoryservice.service.InventoryService;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +19,7 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -25,14 +28,16 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EmbeddedKafka(topics = {"inventory-updated"}, partitions = 1, brokerProperties = {"listeners=PLAINTEXT://localhost:9092", "port=9092"})
+@EmbeddedKafka(topics = {"inventory-events"}, partitions = 1)
 @Testcontainers
 @DirtiesContext
+@ActiveProfiles("test")
 class InventoryServiceKafkaTest {
 
     @Container
@@ -46,6 +51,10 @@ class InventoryServiceKafkaTest {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.kafka.admin.properties.offsets.topic.num.partitions", () -> "1");
+        registry.add("spring.kafka.admin.properties.offsets.topic.replication.factor", () -> "1");
+        registry.add("spring.kafka.bootstrap-servers", () ->
+                System.getProperty("spring.embedded.kafka.brokers", "localhost:9092"));
     }
 
     @Autowired
@@ -54,17 +63,31 @@ class InventoryServiceKafkaTest {
     @Autowired
     private InventoryRepository inventoryRepository;
 
+    @Autowired
+    private InventoryService inventoryService;
+
     private Consumer<String, String> consumer;
 
     @BeforeEach
     void setUp() {
         inventoryRepository.deleteAll();
 
-        Map<String, Object> consumerProps = KafkaTestUtils.consumerProps("testGroup", "true", embeddedKafka);
-        consumerProps.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-        consumerProps.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-        consumer = new DefaultKafkaConsumerFactory<String, String>(consumerProps).createConsumer();
-        embeddedKafka.consumeFromAnEmbeddedTopic(consumer, "inventory-updated");
+        Map<String, Object> props = KafkaTestUtils.consumerProps(
+                embeddedKafka,
+                "testGroup",
+                true
+        );
+
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        consumer = new DefaultKafkaConsumerFactory<>(
+                props,
+                new org.apache.kafka.common.serialization.StringDeserializer(),
+                new org.apache.kafka.common.serialization.StringDeserializer()
+        ).createConsumer();
+
+        embeddedKafka.consumeFromAnEmbeddedTopic(consumer, "inventory-events");
+        try { Thread.sleep(3000); } catch (InterruptedException e) {}
     }
 
     @AfterEach
@@ -74,37 +97,25 @@ class InventoryServiceKafkaTest {
 
     @Test
     void testKafkaIntegration_ShouldSendInventoryUpdatedEvent_WhenInventoryUpserted() {
-        // Arrange
         InventoryRequest request = new InventoryRequest("TEST-SKU", 10);
 
-        // Act
-        InventoryResponse response = inventoryRepository.findBySkuCode("TEST-SKU")
-                .map(inventory -> {
-                    inventory.setQuantity(inventory.getQuantity() + request.quantity());
-                    return mapToResponse(inventoryRepository.save(inventory));
-                })
-                .orElseGet(() -> {
-                    Inventory newInventory = new Inventory();
-                    newInventory.setSkuCode(request.skuCode());
-                    newInventory.setQuantity(request.quantity());
-                    return mapToResponse(inventoryRepository.save(newInventory));
-                });
+        InventoryResponse response = inventoryService.upsertInventory(request);
 
-        // Wait for Kafka message
-        ConsumerRecords<String, String> records = KafkaTestUtils.getRecords(consumer, Duration.ofSeconds(5));
+        ConsumerRecords<String, String> records = KafkaTestUtils.getRecords(consumer, Duration.ofSeconds(15));
 
-        // Assert
-        assertTrue(records.count() > 0);
+        assertNotNull(records, "Records should not be null");
+        assertTrue(records.count() > 0, "Should receive at least one record");
+
         boolean inventoryUpdatedFound = false;
         for (ConsumerRecord<String, String> record : records) {
-            if (record.topic().equals("inventory-updated")) {
+            if (record.topic().equals("inventory-events")) {
                 inventoryUpdatedFound = true;
                 assertTrue(record.value().contains("TEST-SKU"));
                 assertTrue(record.value().contains(String.valueOf(response.quantity())));
                 break;
             }
         }
-        assertTrue(inventoryUpdatedFound, "Inventory updated event should be sent");
+        assertTrue(inventoryUpdatedFound, "Inventory updated event should be sent to 'inventory-events' topic");
     }
 
     private InventoryResponse mapToResponse(Inventory inventory) {
